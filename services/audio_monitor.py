@@ -67,7 +67,8 @@ _FP_PATH         = os.path.join(
 )
 
 # Z-drift detection
-_ZDRIFT_HISTORY   = 24    # magnitude windows to track (covers ~12s at 500ms/window)
+_ZDRIFT_HISTORY   = 8     # rolling window (~4s at 500ms/window)
+_ZDRIFT_MIN_CHECK = 4     # start checking after this many windows (~2s)
 _ZDRIFT_THRESHOLD = 0.12  # fractional magnitude increase (first → second half) → alert
 
 # Feed autotune
@@ -335,8 +336,9 @@ class VibrationMonitor:
 
             # ── Z-drift: magnitude trending up on a stable cut ────────────────
             self._mag_history.append(mean_mag)
-            if len(self._mag_history) == _ZDRIFT_HISTORY and not self._zdrift_fired:
-                half    = _ZDRIFT_HISTORY // 2
+            n = len(self._mag_history)
+            if n >= _ZDRIFT_MIN_CHECK and not self._zdrift_fired:
+                half    = n // 2
                 early   = sum(list(self._mag_history)[:half]) / half
                 late    = sum(list(self._mag_history)[half:]) / half
                 if early > 0 and (late - early) / early > _ZDRIFT_THRESHOLD:
