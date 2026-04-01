@@ -1,18 +1,10 @@
 {
-  "debug": {
-    "enabled": true,
-    "dedup_window_seconds": 10
-  },
   "models": {
-    "haiku": "claude-haiku-4-5",
     "sonnet": "claude-sonnet-4-6"
   },
   "machine": {
     "serial_port": "/dev/ttyUSB0",
     "baud_rate": 115200
-  },
-  "camera": {
-    "device_index": 0
   },
   "vibration": {
     "i2c_address": 104

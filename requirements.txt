@@ -10,9 +10,6 @@ flask-socketio>=5.3.0
 python-socketio>=5.10.0
 eventlet>=0.35.0           # async mode for Flask-SocketIO on Pi
 
-# ── Camera (optional — comment out if no camera attached) ─────────────────
-opencv-python-headless>=4.9.0
-
 # ── Vibration sensor — MPU-6050 via I2C ───────────────────────────────────
 # Enable I2C first: sudo raspi-config → Interface Options → I2C → Enable
 smbus2>=0.4.3              # I2C communication with MPU-6050
