@@ -1,17 +1,25 @@
 """
-Claude G-code generation service.
+Claude G-code service — surfacing / planing only.
 
-Uses Claude Sonnet for complex reasoning tasks:
-- Surfacing toolpath generation from plain-English dimensions
-- Full job planning from a natural-language description
-- Real-time job narration (teaching mode)
-- Voice command interpretation
+Takes stock dimensions and thickness, generates a complete surfacing
+(facing) program via Claude Sonnet, streams it back as SSE.
 
-All generated G-code is presented to the human approval gate before
-any commands are sent to the machine.
+Inputs the user provides:
+  stock_width_mm        X dimension of stock
+  stock_length_mm       Y dimension of stock
+  current_thickness_mm  how thick the stock is right now
+  target_thickness_mm   how thick you want it after surfacing
+  bit_diameter_mm       your surfacing bit (e.g. 25.4 for a 1-inch bit)
+  feed_rate_mmpm        cutting feed rate in mm/min
+  spindle_rpm           spindle speed
+  depth_per_pass_mm     (optional) max cut per pass, default 0.5mm
+
+Origin is always XY0 of the current workspace — no configuration needed.
+Z0 is always the spoilboard surface.
 """
 
 import json
+import math
 import os
 from typing import Generator
 
@@ -21,201 +29,84 @@ from utils.logger import log_claude_response
 
 _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-_SONNET_MODEL = "claude-sonnet-4-6"
+_SYSTEM = """You are generating a surfacing (face milling) program for a Shapeoko 5 Pro
+running grblHAL. Keep the output focused and practical.
 
-_GCODE_SYSTEM = """You are the G-code generation engine for a Shapeoko 5 Pro CNC machine
-running grblHAL (G-code dialect close to standard RS-274).
+Machine rules:
+- Units: G21 (mm)
+- XY0 is the bottom-left corner of the stock, already set in the workspace
+- Z0 is the spoilboard surface
+- Strategy: raster passes along X, stepping in Y each pass
+- Lead in from X = -2mm (slightly outside stock edge) at safe height
+- Safe travel height: Z5
+- Final retract: Z10, then G0 X0 Y0
+- Spindle on (M3) before any cutting move; spindle off (M5) at the end
+- No straight plunges — lower to cut depth during the X lead-in move
 
-Machine specs:
-- Controller: grblHAL on ESP32
-- Work area: 838mm x 838mm (Shapeoko 5 Pro)
-- X/Y zero: bottom-left corner of stock
-- Z zero: spoilboard surface
-- Spindle: trim router (variable speed)
-- BitSetter: present (use G38.2 probing sequence when tool changes occur)
-
-G-code rules you must follow:
-1. Always start with spindle on (M3 Sxxx) before any cutting moves
-2. Always end with spindle off (M5), then safe Z retract, then G0 to X0Y0
-3. Use G21 (mm) unless explicitly asked for inches
-4. Ramp into cuts — never plunge straight down into material at full feed
-5. Leave tabs on profile cuts unless explicitly told not to
-6. Use G28 for homing references, not hard-coded coordinates
-
-When generating G-code:
-- Show the complete program, no placeholders
-- After the G-code block, add a plain-English explanation of every section
-- Flag any assumptions you made (material thickness, bit diameter, etc.)
-- Warn if any parameter seems aggressive for the material
+Output format:
+1. A short line stating what the program will do (e.g. "Surfacing 300×400mm stock, removing 3mm in 6 passes")
+2. The complete G-code block (fenced with ```gcode)
+3. A plain-English section titled "What each part does:" explaining the program in plain language
 """
 
 
-def stream_gcode_generation(task_description: str, parameters: dict) -> Generator[str, None, None]:
+def stream_surfacing(params: dict) -> Generator[str, None, None]:
     """
-    Generate G-code from a plain-English task description.
+    Generate a surfacing program and stream it as SSE.
 
-    Yields SSE chunks. The final chunk is 'data: [DONE]\\n\\n'.
-
-    parameters may include:
-      material, thickness_mm, target_thickness_mm, bit_diameter_mm,
-      feed_rate_mmpm, spindle_rpm, stepover_percent, stock_width_mm,
-      stock_length_mm, depth_of_cut_mm
+    Yields 'data: <text>\\n\\n' chunks.
+    Final chunk: 'data: [DONE]\\n\\n'
     """
-    param_str = json.dumps(parameters, indent=2) if parameters else "(none provided)"
-    user_msg = (
-        f"Task: {task_description}\n\n"
-        f"Known parameters:\n{param_str}\n\n"
-        "Generate the complete G-code program and explain every section in plain English."
+    # Validate required inputs
+    required = [
+        "stock_width_mm", "stock_length_mm",
+        "current_thickness_mm", "target_thickness_mm",
+        "bit_diameter_mm", "feed_rate_mmpm", "spindle_rpm",
+    ]
+    missing = [k for k in required if k not in params]
+    if missing:
+        yield f"data: Error — missing: {', '.join(missing)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    removal = params["current_thickness_mm"] - params["target_thickness_mm"]
+    if removal <= 0:
+        yield "data: Error — target thickness must be less than current thickness.\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    depth_per_pass = params.get("depth_per_pass_mm", 0.5)
+    z_passes = math.ceil(removal / depth_per_pass)
+    stepover = params["bit_diameter_mm"] * 0.45          # 45% stepover default
+    y_passes = math.ceil(params["stock_length_mm"] / stepover) + 1
+
+    summary = (
+        f"Stock: {params['stock_width_mm']} × {params['stock_length_mm']} mm\n"
+        f"Remove: {removal:.2f} mm in {z_passes} Z-pass(es), "
+        f"{y_passes} Y-strips per pass\n"
+        f"Bit: {params['bit_diameter_mm']} mm diameter, "
+        f"{stepover:.1f} mm stepover\n"
+        f"Feed: {params['feed_rate_mmpm']} mm/min  Spindle: {params['spindle_rpm']} RPM\n"
+        f"Depth per pass: {depth_per_pass} mm"
     )
 
-    full_response = []
+    user_msg = f"Generate a surfacing program with these parameters:\n\n{summary}\n\nXY0 is already set. Go."
 
+    full_response = []
     try:
         with _client.messages.stream(
-            model=_SONNET_MODEL,
-            max_tokens=4096,
-            system=[
-                {
-                    "type": "text",
-                    "text": _GCODE_SYSTEM,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_msg}],
         ) as stream:
             for text in stream.text_stream:
                 full_response.append(text)
-                safe = text.replace("\n", "\\n")
-                yield f"data: {safe}\n\n"
+                yield f"data: {text.replace(chr(10), '\\n')}\n\n"
 
-        log_claude_response("gcode_generation", task_description[:100], "".join(full_response))
+        log_claude_response("surfacing", summary[:80], "".join(full_response))
 
     except anthropic.APIError as exc:
-        yield f"data: Error generating G-code: {exc}\n\n"
+        yield f"data: Claude error: {exc}\n\n"
 
     yield "data: [DONE]\n\n"
-
-
-def stream_job_narration(gcode_line: str, operation_type: str) -> Generator[str, None, None]:
-    """
-    Narrate what a single G-code line is doing, for teaching mode.
-    Uses Haiku for speed and low cost during active cutting.
-    """
-    from services.claude_debug import _HAIKU_MODEL  # reuse haiku model constant
-
-    msg = (
-        f"G-code line: {gcode_line}\n"
-        f"Operation type: {operation_type}\n"
-        "Explain what this line does in one plain-English sentence. "
-        "Be specific — mention what the machine is physically doing."
-    )
-
-    try:
-        with _client.messages.stream(
-            model=_HAIKU_MODEL,
-            max_tokens=128,
-            system="You are a CNC teaching assistant. Explain G-code in plain English for a hobbyist.",
-            messages=[{"role": "user", "content": msg}],
-        ) as stream:
-            for text in stream.text_stream:
-                safe = text.replace("\n", " ")
-                yield f"data: {safe}\n\n"
-    except anthropic.APIError:
-        pass
-
-    yield "data: [DONE]\n\n"
-
-
-def generate_daily_insight(job_log: list) -> str:
-    """
-    Generate one focused shop insight from the day's job log.
-    Returns a single sentence string (blocking call, called once per day).
-    """
-    from services.claude_debug import _HAIKU_MODEL
-
-    if not job_log:
-        return ""
-
-    log_summary = json.dumps(job_log, indent=2)
-
-    response = _client.messages.create(
-        model=_HAIKU_MODEL,
-        max_tokens=128,
-        system=(
-            "You are a CNC shop advisor. Review today's job log and produce ONE specific, "
-            "actionable insight. Write exactly one sentence. Be concrete — mention actual "
-            "numbers, bit names, or operations from the log. No preamble."
-        ),
-        messages=[
-            {
-                "role": "user",
-                "content": f"Today's job log:\n{log_summary}\n\nGive me one shop insight.",
-            }
-        ],
-    )
-
-    for block in response.content:
-        if block.type == "text":
-            return block.text.strip()
-    return ""
-
-
-def interpret_voice_command(transcript: str, machine_state: dict) -> dict:
-    """
-    Interpret a voice command (English or Spanish) and return a structured
-    action proposal for the human approval gate.
-
-    Returns:
-      {
-        "language": "en" | "es",
-        "intent": str,
-        "action": str,
-        "parameters": dict,
-        "explanation": str,
-        "requires_approval": bool
-      }
-    """
-    state_str = json.dumps(machine_state, indent=2)
-
-    response = _client.messages.create(
-        model=_SONNET_MODEL,
-        max_tokens=512,
-        system=[
-            {
-                "type": "text",
-                "text": (
-                    _GCODE_SYSTEM
-                    + "\n\nYou also interpret voice commands in English and Spanish. "
-                    "Detect the language automatically. Return a JSON object with keys: "
-                    "language, intent, action, parameters, explanation, requires_approval. "
-                    "Return ONLY valid JSON, no surrounding text."
-                ),
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"Voice transcript: \"{transcript}\"\n\n"
-                    f"Current machine state:\n{state_str}\n\n"
-                    "Interpret this command and return the JSON action proposal."
-                ),
-            }
-        ],
-    )
-
-    for block in response.content:
-        if block.type == "text":
-            try:
-                return json.loads(block.text)
-            except json.JSONDecodeError:
-                return {
-                    "language": "unknown",
-                    "intent": "parse_error",
-                    "action": "none",
-                    "parameters": {},
-                    "explanation": block.text,
-                    "requires_approval": True,
-                }
-    return {}
