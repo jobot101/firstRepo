@@ -1,11 +1,13 @@
 """
 Vibration monitor — MPU-6050 accelerometer on the router body.
 
+Runs entirely without Claude. All interpretation is algorithmic —
+signal processing does not need a language model.
+
 Why accelerometer instead of microphone:
-  The vacuum running alongside the spindle dominates any microphone signal.
-  The MPU-6050 is mounted directly on the router body and measures
-  structure-borne vibration — the vacuum is irrelevant because it isn't
-  touching the spindle.
+  The vacuum dominates any microphone signal.
+  The MPU-6050 is mounted on the router body and measures
+  structure-borne vibration directly — the vacuum is irrelevant.
 
 Wiring (GY-521 breakout board → Raspberry Pi):
   VCC  → Pin 1  (3.3V)
@@ -13,29 +15,21 @@ Wiring (GY-521 breakout board → Raspberry Pi):
   SDA  → Pin 3  (GPIO 2, I2C SDA)
   SCL  → Pin 5  (GPIO 3, I2C SCL)
 
-  Enable I2C on the Pi:  sudo raspi-config → Interface Options → I2C → Enable
-  Install library:       pip install smbus2
-
-MPU-6050 I2C address: 0x68 (AD0 pin low, which is default on GY-521)
+  Enable I2C:  sudo raspi-config → Interface Options → I2C → Enable
 
 How it works:
-  Collects 512 accelerometer samples at ~500Hz, then runs FFT on the
-  combined vibration magnitude (sqrt(x²+y²+z²)).
+  Samples at 500Hz, runs FFT on 512-sample windows with 50% overlap.
+  Tracks spectral flux — how much the frequency profile changes
+  window-to-window. A smooth cut is spectrally stable. Chatter and
+  wrong feeds show up as instability.
 
-  A clean cut has a STABLE, CONSISTENT frequency spectrum — the same
-  peaks in roughly the same places each window.
-
-  Chatter / wrong feeds show up as NEW frequency peaks appearing, or
-  existing peaks shifting and spiking unpredictably.
-
-  Spectral flux (how much the spectrum changes window-to-window) is
-  the core metric. Low flux = smooth cut. High flux = something is off.
-
-  Crash detection uses raw magnitude spike — same as before, reliable.
+  Three outputs, all rule-based, no API calls:
+    crash     — magnitude spike >6× baseline → spindle off immediately
+    chatter   — high flux sustained 3 windows → suggests feed/RPM change
+    wear      — magnitude creeping up over time → flags possible dull bit
 """
 
 import math
-import os
 import threading
 import time
 from collections import deque
@@ -261,43 +255,49 @@ def _s16(high: int, low: int) -> int:
     return val - 65536 if val >= 32768 else val
 
 
-def diagnose_chatter_with_claude(description: str, metrics: dict) -> dict:
+def diagnose_chatter(description: str, metrics: dict) -> dict:
     """
-    Send vibration anomaly data to Claude Haiku for a feed/RPM suggestion.
-    Returns a proposed adjustment for the approval gate.
+    Rule-based chatter diagnosis from FFT metrics. No API calls.
+
+    Heuristics:
+      - Magnitude rose AND flux is high  → feed rate likely too high
+      - Magnitude stable/fell AND flux high → RPM mismatch for this bit/material
+      - Default fallback                  → generic feed+RPM check suggestion
     """
-    import json
-    import anthropic
+    flux        = metrics.get("spectral_flux", 0)
+    baseline    = metrics.get("baseline_magnitude", 1)
+    current     = metrics.get("current_magnitude", baseline)
+    peak_hz     = metrics.get("peak_shift_hz", 0)
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    mag_ratio = current / baseline if baseline else 1.0
 
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=256,
-        system=(
-            "You are a CNC cutting specialist analysing vibration data from an accelerometer "
-            "mounted on a trim router (Shapeoko 5 Pro). "
-            "Spectral flux measures how much the vibration frequency profile has changed "
-            "from a stable baseline — high flux means the cut is no longer smooth. "
-            "Suggest a specific feed rate or RPM adjustment to restore a clean cut. "
-            "Return JSON only: {diagnosis, suggested_feed_rate_mmpm, suggested_spindle_rpm, explanation}. "
-            "If you cannot determine a safe adjustment, set both suggested values to null."
-        ),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Vibration anomaly:\n{description}\n\n"
-                f"Metrics:\n{json.dumps(metrics, indent=2)}\n\n"
-                "What adjustment do you suggest?"
-            ),
-        }],
-    )
+    if mag_ratio > 1.15:
+        # Cutting harder → more vibration energy → back off feed
+        diagnosis   = "Vibration amplitude increased with spectral change — likely feed rate too high."
+        explanation = "Reduce feed rate 10–15% and observe whether vibration stabilises."
+        feed_hint   = "reduce_10_to_15_pct"
+        rpm_hint    = None
+    elif mag_ratio < 0.90:
+        # Quieter but spectrally unstable → possibly rubbing / RPM too low
+        diagnosis   = "Low amplitude but unstable spectrum — possible rubbing or RPM too low for chip load."
+        explanation = "Try increasing spindle RPM by 500–1000 RPM to improve chip evacuation."
+        feed_hint   = None
+        rpm_hint    = "increase_500_to_1000_rpm"
+    else:
+        # Magnitude stable, spectrum shifted — resonance at a specific frequency
+        diagnosis   = (
+            f"Spectral shift at {peak_hz:.0f} Hz without major amplitude change — "
+            "resonance or chatter at current feed/RPM combination."
+        )
+        explanation = "Adjust feed rate ±10% or spindle RPM ±500 to move away from the resonant frequency."
+        feed_hint   = "adjust_plus_minus_10_pct"
+        rpm_hint    = "adjust_plus_minus_500_rpm"
 
-    for block in response.content:
-        if block.type == "text":
-            try:
-                import json as _json
-                return _json.loads(block.text)
-            except Exception:
-                return {"diagnosis": block.text, "explanation": block.text}
-    return {}
+    return {
+        "diagnosis":    diagnosis,
+        "explanation":  explanation,
+        "feed_hint":    feed_hint,
+        "rpm_hint":     rpm_hint,
+        "spectral_flux": round(flux, 3),
+        "peak_shift_hz": round(peak_hz, 1),
+    }

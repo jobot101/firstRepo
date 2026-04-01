@@ -20,7 +20,7 @@ from flask_socketio import SocketIO, emit
 from routes.debug import debug_bp
 from routes.jobs import jobs_bp
 from services import bit_tracker, camera
-from services.audio_monitor import VibrationMonitor, diagnose_chatter_with_claude
+from services.audio_monitor import VibrationMonitor, diagnose_chatter
 from utils.logger import log
 
 
@@ -134,7 +134,7 @@ def _start_audio_monitor(app: Flask, socketio: SocketIO, settings: dict):
         socketio.emit("crash_detected", {"source": "vibration_monitor"})
 
     def on_chatter(description, metrics):
-        result = diagnose_chatter_with_claude(description, metrics)
+        result = diagnose_chatter(description, metrics)
         socketio.emit("chatter_detected", {"description": description, "diagnosis": result})
 
     app.config["VIBRATION_MONITOR"] = VibrationMonitor(
