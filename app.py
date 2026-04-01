@@ -84,7 +84,10 @@ def _register_events(socketio: SocketIO, app: Flask):
         )
         monitor = app.config.get("VIBRATION_MONITOR")
         if monitor:
-            monitor.start()
+            monitor.start(
+                bit_name=data.get("bit_name", "unknown"),
+                material=data.get("material", "default"),
+            )
 
     @socketio.on("job_ended")
     def on_job_ended(data):
@@ -104,12 +107,28 @@ def _start_vibration_monitor(app: Flask, socketio: SocketIO, settings: dict):
 
     def on_chatter(description, metrics):
         result = diagnose_chatter(description, metrics)
-        socketio.emit("chatter_detected", {"description": description, "diagnosis": result})
+        socketio.emit("chatter_detected", {"description": description, "diagnosis": result}, broadcast=True)
+
+    def on_z_drift(metrics):
+        log("z_drift", metrics)
+        socketio.emit("z_drift_detected", {
+            "message": (
+                f"Cutting force increasing on a stable cut ({metrics['drift_pct']}% rise). "
+                "Check bit isn't pulling out of collet and Z axis hasn't lost steps."
+            ),
+            "metrics": metrics,
+        }, broadcast=True)
+
+    def on_feed_suggestion(data):
+        log("feed_autotune", data)
+        socketio.emit("feed_suggestion", data, broadcast=True)
 
     app.config["VIBRATION_MONITOR"] = VibrationMonitor(
         i2c_address=settings.get("vibration", {}).get("i2c_address", 0x68),
         on_crash=on_crash,
         on_chatter=on_chatter,
+        on_z_drift=on_z_drift,
+        on_feed_suggestion=on_feed_suggestion,
     )
 
 

@@ -53,6 +53,17 @@ const TopBar = (() => {
     socket.on('crash_notification', ()   => showCrashNotification());
     socket.on('chatter_detected',   data => showChatterAlert(data));
     socket.on('bit_warning',        data => showMessage(data.message, { type: 'warning' }));
+    socket.on('z_drift_detected',   data => showMessage(data.message, { type: 'error' }));
+    socket.on('feed_suggestion',    data => showFeedSuggestion(data));
+  }
+
+  function showFeedSuggestion(data) {
+    const arrow = data.direction === 'reduce' ? '▼' : '▲';
+    _setMessage(
+      `${arrow} Feed ${data.direction} ${data.step_pct}% — ${data.reason}`,
+      'warning'
+    );
+    _scheduleClear(10000);
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────
