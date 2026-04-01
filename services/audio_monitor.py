@@ -280,16 +280,16 @@ def diagnose_chatter(description: str, metrics: dict) -> dict:
     elif mag_ratio < 0.90:
         # Quieter but spectrally unstable → possibly rubbing / RPM too low
         diagnosis   = "Low amplitude but unstable spectrum — possible rubbing or RPM too low for chip load."
-        explanation = "Try increasing spindle RPM by 500–1000 RPM to improve chip evacuation."
+        explanation = "Try increasing spindle RPM by 500 RPM to improve chip evacuation."
         feed_hint   = None
-        rpm_hint    = "increase_500_to_1000_rpm"
+        rpm_hint    = "increase_500_rpm"
     else:
         # Magnitude stable, spectrum shifted — resonance at a specific frequency
         diagnosis   = (
             f"Spectral shift at {peak_hz:.0f} Hz without major amplitude change — "
             "resonance or chatter at current feed/RPM combination."
         )
-        explanation = "Adjust feed rate ±10% or spindle RPM ±500 to move away from the resonant frequency."
+        explanation = "Adjust feed rate ±10% or spindle RPM ±500 RPM to move away from the resonant frequency."
         feed_hint   = "adjust_plus_minus_10_pct"
         rpm_hint    = "adjust_plus_minus_500_rpm"
 
