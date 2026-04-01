@@ -10,16 +10,13 @@ flask-socketio>=5.3.0
 python-socketio>=5.10.0
 eventlet>=0.35.0           # async mode for Flask-SocketIO on Pi
 
-# ── Watch folder ──────────────────────────────────────────────────────────
-watchdog>=4.0.0
-
 # ── Camera (optional — comment out if no camera attached) ─────────────────
 opencv-python-headless>=4.9.0
 
-# ── Audio (optional — comment out if no microphone attached) ──────────────
-sounddevice>=0.4.6
-numpy>=1.26.0
+# ── Vibration sensor — MPU-6050 via I2C ───────────────────────────────────
+# Enable I2C first: sudo raspi-config → Interface Options → I2C → Enable
+smbus2>=0.4.3              # I2C communication with MPU-6050
+numpy>=1.26.0              # FFT analysis of vibration data
 
 # ── Utilities ─────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0       # load ANTHROPIC_API_KEY from .env file
-requests>=2.31.0           # for any outbound HTTP calls

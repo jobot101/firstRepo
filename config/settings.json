@@ -14,10 +14,8 @@
   "camera": {
     "device_index": 0
   },
-  "audio": {
-    "sample_rate": 44100,
-    "channels": 1,
-    "chunk_size": 1024
+  "vibration": {
+    "i2c_address": 104
   },
   "bits": {
     "warn_hours": 5.0,

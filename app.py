@@ -19,7 +19,8 @@ from flask_socketio import SocketIO, emit
 
 from routes.debug import debug_bp
 from routes.jobs import jobs_bp
-from services import audio_monitor, bit_tracker, camera
+from services import bit_tracker, camera
+from services.audio_monitor import VibrationMonitor, diagnose_chatter_with_claude
 from utils.logger import log
 
 
@@ -112,9 +113,15 @@ def _register_events(socketio: SocketIO, app: Flask):
             data.get("material", "default"),
             data.get("feed_rate_mmpm", 0),
         )
+        monitor = app.config.get("VIBRATION_MONITOR")
+        if monitor:
+            monitor.start()
 
     @socketio.on("job_ended")
     def on_job_ended(data):
+        monitor = app.config.get("VIBRATION_MONITOR")
+        if monitor:
+            monitor.stop()
         result = bit_tracker.end_job()
         if result:
             socketio.emit("bit_update", result, broadcast=True)
@@ -123,20 +130,15 @@ def _register_events(socketio: SocketIO, app: Flask):
 
 
 def _start_audio_monitor(app: Flask, socketio: SocketIO, settings: dict):
-    audio = settings.get("audio", {})
-
     def on_crash():
-        socketio.emit("crash_detected", {"source": "audio_monitor"})
+        socketio.emit("crash_detected", {"source": "vibration_monitor"})
 
-    def on_chatter(description):
-        from services.audio_monitor import diagnose_chatter_with_claude
-        result = diagnose_chatter_with_claude(description, {})
+    def on_chatter(description, metrics):
+        result = diagnose_chatter_with_claude(description, metrics)
         socketio.emit("chatter_detected", {"description": description, "diagnosis": result})
 
-    app.config["AUDIO_MONITOR"] = audio_monitor.AudioMonitor(
-        sample_rate=audio.get("sample_rate", 44100),
-        channels=audio.get("channels", 1),
-        chunk_size=audio.get("chunk_size", 1024),
+    app.config["VIBRATION_MONITOR"] = VibrationMonitor(
+        i2c_address=settings.get("vibration", {}).get("i2c_address", 0x68),
         on_crash=on_crash,
         on_chatter=on_chatter,
     )
