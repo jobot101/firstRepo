@@ -14,6 +14,10 @@ const TopBar = (() => {
   let _toggleEl  = null;
   let _statusEl  = null;
   let _debugEnabled = true;
+  let _clearTimer = null;
+
+  // Message types that stay until the next event (operator must see these).
+  const _PERSISTENT_TYPES = new Set(['error', 'no_go']);
 
   // ── Init ───────────────────────────────────────────────────────────────
 
@@ -34,13 +38,21 @@ const TopBar = (() => {
 
   // ── Public ─────────────────────────────────────────────────────────────
 
-  function showMessage(text, { type = 'info', duration = 0 } = {}) {
+  function showMessage(text, { type = 'info' } = {}) {
     _setMessage(text, type);
-    if (duration > 0) setTimeout(clearMessage, duration);
+    // Errors stay until replaced. Everything else clears after 5s.
+    if (!_PERSISTENT_TYPES.has(type)) {
+      _scheduleClear(5000);
+    }
   }
 
   function clearMessage() {
     _setMessage('', 'idle');
+  }
+
+  function _scheduleClear(ms) {
+    if (_clearTimer) clearTimeout(_clearTimer);
+    _clearTimer = setTimeout(clearMessage, ms);
   }
 
   // ── SSE streaming (Claude error explanation) ───────────────────────────
@@ -70,7 +82,7 @@ const TopBar = (() => {
 
           for (const chunk of lines) {
             const text = chunk.replace(/^data: /, '');
-            if (text === '[DONE]') { _setMessage(accumulated.trim(), 'info'); return; }
+            if (text === '[DONE]') { _setMessage(accumulated.trim(), 'info'); _scheduleClear(12000); return; }
             accumulated += text + ' ';
             _setMessage(accumulated.trim(), 'streaming');
           }

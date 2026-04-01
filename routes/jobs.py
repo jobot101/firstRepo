@@ -22,10 +22,13 @@ jobs_bp = Blueprint("jobs", __name__)
 
 _pending: dict = {}
 
-REQUIRES_APPROVAL = {
-    "start_job", "pause", "resume", "send_gcode",
-    "feed_override", "spindle_speed", "home", "bitsetter_probe", "tool_change",
-}
+# Only gate actions that start motion from rest or change the cutting tool.
+# Mid-job adjustments (feed, spindle, pause/resume) execute immediately
+# so the operator's flow is never interrupted during a cut.
+REQUIRES_APPROVAL = {"start_job", "home", "tool_change"}
+
+# These execute directly via machine_command — no gate, no delay.
+EXECUTE_DIRECTLY = {"pause", "resume", "feed_override", "spindle_speed", "bitsetter_probe", "send_gcode"}
 
 
 # ── Surfacing ──────────────────────────────────────────────────────────────
@@ -46,9 +49,19 @@ def surfacing():
 def propose():
     data = request.get_json(silent=True) or {}
     action = data.get("action")
-    if not action or action not in REQUIRES_APPROVAL:
+
+    if not action or (action not in REQUIRES_APPROVAL and action not in EXECUTE_DIRECTLY):
         return jsonify({"error": f"unknown action: {action}"}), 400
 
+    # Mid-job actions execute immediately — no gate, no tap required.
+    if action in EXECUTE_DIRECTLY:
+        socketio = current_app.extensions.get("socketio")
+        if socketio:
+            socketio.emit("machine_command", {"action": action, "parameters": data.get("parameters", {})})
+        log_job_event("direct_execute", {"action": action})
+        return jsonify({"status": "executed", "action": action})
+
+    # Actions that need approval go to the gate.
     action_id = str(uuid.uuid4())
     pending = {
         "action_id": action_id,
