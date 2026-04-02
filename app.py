@@ -124,7 +124,7 @@ def _start_vibration_monitor(app: Flask, socketio: SocketIO, settings: dict):
         socketio.emit("feed_suggestion", data, broadcast=True)
 
     app.config["VIBRATION_MONITOR"] = VibrationMonitor(
-        i2c_address=settings.get("vibration", {}).get("i2c_address", 0x68),
+        device=settings.get("vibration", {}).get("device"),
         on_crash=on_crash,
         on_chatter=on_chatter,
         on_z_drift=on_z_drift,

@@ -50,8 +50,8 @@ The feature works like this:
 - Claude returns specific VCarve tool database values (feed rate, plunge rate, RPM, pass depth) ready to type in
 - Gets more accurate across multiple runs of the same bit/material
 
-### 2. Hardware not yet wired
-- MPU-6050 (GY-521 breakout): VCC→Pin1, GND→Pin6, SDA→Pin3, SCL→Pin5. Enable I2C via `raspi-config`.
+### 2. Hardware not yet connected
+- Piezo contact mic → Behringer UCA22 instrument input → USB into Pi. No configuration needed, shows up as default audio device.
 - grblHAL serial: `/dev/ttyUSB0` at 115200 baud (set in `config/settings.json`)
 
 ---

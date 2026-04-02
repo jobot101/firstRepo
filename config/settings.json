@@ -7,7 +7,7 @@
     "baud_rate": 115200
   },
   "vibration": {
-    "i2c_address": 104
+    "device": null
   },
   "bits": {
     "warn_hours": 5.0,
