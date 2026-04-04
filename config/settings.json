@@ -1,0 +1,19 @@
+{
+  "models": {
+    "sonnet": "claude-sonnet-4-6"
+  },
+  "machine": {
+    "serial_port": "/dev/ttyUSB0",
+    "baud_rate": 115200
+  },
+  "vibration": {
+    "device": null
+  },
+  "bits": {
+    "warn_hours": 5.0,
+    "profiles": {}
+  },
+  "approval_gate": {
+    "enabled": true
+  }
+}

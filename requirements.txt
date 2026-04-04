@@ -1,0 +1,18 @@
+# Smart CNC Shop Assistant — Python dependencies
+# Tested on Raspberry Pi OS (Debian Bookworm), Python 3.11
+
+# ── Core API ──────────────────────────────────────────────────────────────
+anthropic>=0.40.0          # Claude API SDK
+
+# ── Web framework ─────────────────────────────────────────────────────────
+flask>=3.0.0
+flask-socketio>=5.3.0
+python-socketio>=5.10.0
+eventlet>=0.35.0           # async mode for Flask-SocketIO on Pi
+
+# ── Vibration sensor — piezo contact mic via Behringer UCA22 ──────────────
+sounddevice>=0.4.6         # audio input from UCA22 (USB audio device)
+numpy>=1.26.0              # FFT analysis of vibration data
+
+# ── Utilities ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0       # load ANTHROPIC_API_KEY from .env file
